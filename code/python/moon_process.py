@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+import os
 import cv2
 import numpy as np
 import glob
@@ -29,6 +29,21 @@ def is_overexposed(image, saturation_percent_threshold=1.0):
     return saturation_percent > saturation_percent_threshold
 
 def load_images(image_pattern, blur_threshold=100, underexposed_threshold=10, overexposed_threshold=1.0):
+    # Get the directory where the script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    top_dir = os.path.abspath(os.path.join(script_dir, "../.."))
+
+    # Define output directories relative to top_dir
+    output_dirs = {
+        "blurred": os.path.join(top_dir, "outputs/blurred"),
+        "underexposed": os.path.join(top_dir, "outputs/underexposed"),
+        "overexposed": os.path.join(top_dir, "outputs/overexposed")
+    }
+
+    # Create output directories if they don't exist
+    for dir_path in output_dirs.values():
+        os.makedirs(dir_path, exist_ok=True)
+
     image_paths = glob.glob(image_pattern)
     valid_images = []
     valid_paths = []
@@ -45,16 +60,19 @@ def load_images(image_pattern, blur_threshold=100, underexposed_threshold=10, ov
         # Check for blur
         if is_blurry(gray, blur_threshold):
             print(f"Rejected {path}: Blurry (Laplacian variance < {blur_threshold})")
+            os.symlink(os.path.abspath(path), os.path.join(output_dirs["blurred"], os.path.basename(path)))
             continue
 
         # Check for underexposure
         if is_underexposed(gray, underexposed_threshold):
             print(f"Rejected {path}: Underexposed (mean intensity < {underexposed_threshold})")
+            os.symlink(os.path.abspath(path), os.path.join(output_dirs["underexposed"], os.path.basename(path)))
             continue
 
         # Check for overexposure
         if is_overexposed(gray, overexposed_threshold):
             print(f"Rejected {path}: Overexposed (saturation > {overexposed_threshold}%)")
+            os.symlink(os.path.abspath(path), os.path.join(output_dirs["overexposed"], os.path.basename(path)))
             continue
 
         valid_images.append(img)
