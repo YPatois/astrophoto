@@ -33,10 +33,8 @@ def is_overexposed(image, saturation_percent_threshold=1.0):
     saturation_percent = (saturated_pixels / total_pixels) * 100
     return saturation_percent > saturation_percent_threshold
 
-def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, overexposed_threshold=1.0):
-    print(f"Loading images from {image_pattern}")
-
-    # Define output directories relative to top_dir
+def setup_output_directories(top_dir):
+    """Create output directories and clean up existing symlinks."""
     output_dirs = {
         "blurred": os.path.join(top_dir, "outputs/blurred"),
         "underexposed": os.path.join(top_dir, "outputs/underexposed"),
@@ -54,6 +52,38 @@ def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, over
             if os.path.islink(item_path):
                 os.remove(item_path)
 
+    return output_dirs
+
+def validate_image(img, path, output_dirs, blur_threshold, underexposed_threshold, overexposed_threshold):
+    """Validate an image and symlink it to the appropriate directory if rejected."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Check for blur
+    if is_blurry(gray, blur_threshold):
+        print(f"Rejected {path}: Blurry (Laplacian variance < {blur_threshold})")
+        os.symlink(os.path.abspath(path), os.path.join(output_dirs["blurred"], os.path.basename(path)))
+        return False
+
+    # Check for underexposure
+    if is_underexposed(gray, underexposed_threshold):
+        print(f"Rejected {path}: Underexposed (mean intensity < {underexposed_threshold})")
+        os.symlink(os.path.abspath(path), os.path.join(output_dirs["underexposed"], os.path.basename(path)))
+        return False
+
+    # Check for overexposure
+    if is_overexposed(gray, overexposed_threshold):
+        print(f"Rejected {path}: Overexposed (saturation > {overexposed_threshold}%)")
+        os.symlink(os.path.abspath(path), os.path.join(output_dirs["overexposed"], os.path.basename(path)))
+        return False
+
+    return True
+
+def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, overexposed_threshold=1.0):
+    print(f"Loading images from {image_pattern}")
+
+    # Setup output directories
+    output_dirs = setup_output_directories(top_dir)
+
     image_paths = glob.glob(image_pattern)
     valid_images = []
     valid_paths = []
@@ -64,29 +94,9 @@ def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, over
             print(f"Warning: Could not read {path}. Skipping.")
             continue
 
-        # Convert to grayscale for analysis
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        # Check for blur
-        if is_blurry(gray, blur_threshold):
-            print(f"Rejected {path}: Blurry (Laplacian variance < {blur_threshold})")
-            os.symlink(os.path.abspath(path), os.path.join(output_dirs["blurred"], os.path.basename(path)))
-            continue
-
-        # Check for underexposure
-        if is_underexposed(gray, underexposed_threshold):
-            print(f"Rejected {path}: Underexposed (mean intensity < {underexposed_threshold})")
-            os.symlink(os.path.abspath(path), os.path.join(output_dirs["underexposed"], os.path.basename(path)))
-            continue
-
-        # Check for overexposure
-        if is_overexposed(gray, overexposed_threshold):
-            print(f"Rejected {path}: Overexposed (saturation > {overexposed_threshold}%)")
-            os.symlink(os.path.abspath(path), os.path.join(output_dirs["overexposed"], os.path.basename(path)))
-            continue
-
-        valid_images.append(img)
-        valid_paths.append(path)
+        if validate_image(img, path, output_dirs, blur_threshold, underexposed_threshold, overexposed_threshold):
+            valid_images.append(img)
+            valid_paths.append(path)
 
     return valid_images, valid_paths
 
