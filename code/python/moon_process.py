@@ -7,6 +7,10 @@ import matplotlib.pyplot as plt
 from skimage.registration import phase_cross_correlation
 from skimage.transform import SimilarityTransform
 
+# Get the directory where the script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
+top_dir = os.path.abspath(os.path.join(script_dir, "../.."))
+
 # --- Step 1: Load Images with Quality Checks ---
 def is_blurry(image, threshold=100):
     """Check if the image is blurry using Laplacian variance."""
@@ -29,9 +33,7 @@ def is_overexposed(image, saturation_percent_threshold=1.0):
     return saturation_percent > saturation_percent_threshold
 
 def load_images(image_pattern, blur_threshold=100, underexposed_threshold=10, overexposed_threshold=1.0):
-    # Get the directory where the script is located
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    top_dir = os.path.abspath(os.path.join(script_dir, "../.."))
+    print(f"Loading images from {image_pattern}")
 
     # Define output directories relative to top_dir
     output_dirs = {
@@ -133,88 +135,12 @@ def save_result(stacked_img, output_path="stacked_moon.png"):
     cv2.imwrite(output_path, stacked_img)
     print(f"Stacked image saved as {output_path}")
 
-# --- Main Workflow ---
-if __name__ == "__main__":
-    # Load images with quality checks
-    images, image_paths = load_images(
-        "moon_*.jpg",
-        blur_threshold=100,
-        underexposed_threshold=10,
-        overexposed_threshold=240
-    )
-
-    if len(images) < 2:
-        print("Error: At least 2 valid images are required for stacking.")
-    else:
-        print(f"Loaded {len(images)} valid images for stacking.")
-
-        # Align images
-        aligned_images = align_images(images)
-
-        # Stack images
-        stacked_img = stack_images(aligned_images)
-
-        # Save the result
-        save_result(stacked_img)
-
-# --- Step 1: Load Images ---
-def load_images(image_pattern):
-    image_paths = glob.glob(image_pattern)
-    images = [cv2.imread(path, cv2.IMREAD_GRAYSCALE) for path in image_paths]
-    return images, image_paths
-
-# --- Step 2: Align Images Using Feature Matching ---
-def align_images(images):
-    # Use the first image as the reference
-    reference = images[0]
-    aligned_images = [reference]
-
-    # Initialize ORB detector
-    orb = cv2.ORB_create()
-
-    for img in images[1:]:
-        # Find keypoints and descriptors
-        kp1, des1 = orb.detectAndCompute(reference, None)
-        kp2, des2 = orb.detectAndCompute(img, None)
-
-        # Match descriptors using Brute-Force Matcher
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-        matches = bf.match(des1, des2)
-        matches = sorted(matches, key=lambda x: x.distance)
-
-        # Extract matched keypoints
-        src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-
-        # Find homography matrix
-        M, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-
-        # Warp the image to align with the reference
-        h, w = reference.shape
-        aligned_img = cv2.warpPerspective(img, M, (w, h))
-        aligned_images.append(aligned_img)
-
-    return aligned_images
-
-# --- Step 3: Stack Aligned Images ---
-def stack_images(aligned_images):
-    # Convert to float32 for averaging
-    stacked = np.zeros_like(aligned_images[0], dtype=np.float32)
-    for img in aligned_images:
-        stacked += img.astype(np.float32)
-    stacked /= len(aligned_images)
-    return np.uint8(stacked)
-
-# --- Step 4: Save the Result ---
-def save_result(stacked_img, output_path="stacked_moon.png"):
-    cv2.imwrite(output_path, stacked_img)
-    print(f"Stacked image saved as {output_path}")
-
-# --- Main Workflow ---
-if __name__ == "__main__":
+def main():
     # Load images (adjust the pattern to match your files)
-    images, _ = load_images("../../org/IMG_*.JPG")
-
+    images, _ = load_images(os.path.join(top_dir, "../org/IMG_*.JPG"))
+    print(f"Loaded {len(images)} images for stacking.")
+    return
+    
     if len(images) < 2:
         print("Error: At least 2 images are required for stacking.")
     else:
@@ -226,3 +152,7 @@ if __name__ == "__main__":
 
         # Save the result
         save_result(stacked_img)
+
+# --- Main Workflow ---
+if __name__ == "__main__":
+    main()
