@@ -34,12 +34,13 @@ def is_overexposed(image, saturation_percent_threshold=1.0):
     return saturation_percent > saturation_percent_threshold
 
 def setup_output_directories(top_dir):
-    """Create output directories and clean up existing symlinks."""
+    """Create output directories and clean up existing files."""
     output_dirs = {
-        "preprocessed": os.path.join(top_dir, "outputs/preprocessed"),
         "blurred": os.path.join(top_dir, "outputs/blurred"),
         "underexposed": os.path.join(top_dir, "outputs/underexposed"),
-        "overexposed": os.path.join(top_dir, "outputs/overexposed")
+        "overexposed": os.path.join(top_dir, "outputs/overexposed"),
+        "preprocessed": os.path.join(top_dir, "outputs/preprocessed"),
+        "tmp1": os.path.join(top_dir, "outputs/tmp1"),
     }
 
     # Create output directories if they don't exist
@@ -60,38 +61,46 @@ def preprocess_moon_image(img):
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     return clahe.apply(gray)
 
-def detect_moon_bbox(img, light_threshold=200):
+def detect_moon_bbox(img, path, output_dirs, light_threshold=50, blur_kernel_size=5, hist_cutoff=1000):
     """
     Detect the Moon's bounding box using projection histograms.
-    - Thresholds the image to isolate bright pixels (Moon).
-    - Uses X and Y axis projections to find the Moon's center and extent.
+    - Blurs the thresholded image to reduce noise.
+    - Uses X and Y axis projections with a cutoff to find the Moon's center and extent.
     - Returns a square crop centered on the Moon, padded with black if needed.
     """
-    gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray0 = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = preprocess_moon_image(gray0)
 
     # Threshold to isolate bright regions (Moon)
     _, thresh = cv2.threshold(gray, light_threshold, 255, cv2.THRESH_BINARY)
 
-    # Project onto X and Y axes
-    x_proj = np.sum(thresh, axis=0)  # Sum along rows (X-axis projection)
-    y_proj = np.sum(thresh, axis=1)  # Sum along columns (Y-axis projection)
+    # Blur the thresholded image to reduce noise
+    thresh_blurred = cv2.GaussianBlur(thresh, (blur_kernel_size, blur_kernel_size), 0)
 
-    # Find non-zero regions in projections
-    x_nonzero = np.where(x_proj > 0)[0]
-    y_nonzero = np.where(y_proj > 0)[0]
+    # Save images for visualization
+    cv2.imwrite(os.path.join(output_dirs["tmp1"], f"thresh_{os.path.basename(path)}"), thresh)
+    cv2.imwrite(os.path.join(output_dirs["tmp1"], f"thresh_blurred_{os.path.basename(path)}"), thresh_blurred)
+
+    # Project onto X and Y axes
+    x_proj = np.sum(thresh_blurred, axis=0)  # Sum along rows (X-axis projection)
+    y_proj = np.sum(thresh_blurred, axis=1)  # Sum along columns (Y-axis projection)
+
+    # Find non-zero regions in projections with a cutoff
+    x_nonzero = np.where(x_proj > hist_cutoff)[0]
+    y_nonzero = np.where(y_proj > hist_cutoff)[0]
 
     if len(x_nonzero) == 0 or len(y_nonzero) == 0:
-        print("No Moon detected")
+        print(f"No Moon detected in {path} (histogram cutoff: {hist_cutoff})")
         return img  # Fallback: return original if no Moon detected
 
-    # Determine bounding box from projections/
+    # Determine bounding box from projections
     x1, x2 = x_nonzero[0], x_nonzero[-1]
     y1, y2 = y_nonzero[0], y_nonzero[-1]
 
     # Expand bounding box to a square, centered on the Moon
     center_x = (x1 + x2) // 2
     center_y = (y1 + y2) // 2
-    size = max(x2 - x1, y2 - y1) * 1.3  # Add 10% padding
+    size = max(x2 - x1, y2 - y1) * 1.1  # Add 10% padding
     x1 = int(center_x - size // 2)
     y1 = int(center_y - size // 2)
     x2 = int(x1 + size)
@@ -144,7 +153,7 @@ def validate_image(img, path, output_dirs, blur_threshold, underexposed_threshol
         return False
 
     # Preprocess and crop to Moon disk for valid images
-    moon_img = detect_moon_bbox(img)
+    moon_img = detect_moon_bbox(img, path, output_dirs)
     if moon_img is None:
         print(f"Warning: Moon detection failed for {path}. Skipping.")
         return False
@@ -155,10 +164,10 @@ def validate_image(img, path, output_dirs, blur_threshold, underexposed_threshol
 
     return True, moon_img  # Return the cropped Moon image if valid
 
-
 def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, overexposed_threshold=1.0):
     print(f"Loading images from {image_pattern}")
 
+    blacklist = [2691]  # List of blacklisted image numbers
     # Setup output directories
     output_dirs = setup_output_directories(top_dir)
 
@@ -166,18 +175,36 @@ def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, over
     valid_images = []
     valid_paths = []
 
+    nb = 0
+
     for path in image_paths:
+        # Extract the image number from the filename (e.g., "IMG_2691.JPG" -> 2691)
+        basename = os.path.basename(path)
+        try:
+            img_number = int(basename.split('_')[1].split('.')[0])  # Extract "nnnn" from "IMG_nnnn.JPG"
+        except (IndexError, ValueError):
+            print(f"Warning: Could not parse image number from {basename}. Skipping.")
+            continue
+
+        # Skip blacklisted images
+        if img_number in blacklist:
+            print(f"Skipping blacklisted image: {basename}")
+            continue
+
+        print(f"Processing {path}")
         img = cv2.imread(path, cv2.IMREAD_COLOR)
         if img is None:
             print(f"Warning: Could not read {path}. Skipping.")
             continue
 
         result = validate_image(img, path, output_dirs, blur_threshold, underexposed_threshold, overexposed_threshold)
-        
+
         if isinstance(result, tuple) and result[0]:
             valid_images.append(result[1])  # Append the cropped Moon image
             valid_paths.append(path)
-        return valid_images, valid_paths
+            nb += 1
+            if nb == 2:
+                return valid_images, valid_paths
 
     return valid_images, valid_paths
 
