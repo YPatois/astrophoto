@@ -16,6 +16,7 @@ def is_blurry(image, threshold=100):
     """Check if the image is blurry using Laplacian variance."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    print(f"Laplacian variance: {laplacian_var}")
     return laplacian_var < threshold
 
 def is_underexposed(image, threshold=10):
@@ -32,7 +33,7 @@ def is_overexposed(image, saturation_percent_threshold=1.0):
     saturation_percent = (saturated_pixels / total_pixels) * 100
     return saturation_percent > saturation_percent_threshold
 
-def load_images(image_pattern, blur_threshold=100, underexposed_threshold=10, overexposed_threshold=1.0):
+def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, overexposed_threshold=1.0):
     print(f"Loading images from {image_pattern}")
 
     # Define output directories relative to top_dir
@@ -45,6 +46,13 @@ def load_images(image_pattern, blur_threshold=100, underexposed_threshold=10, ov
     # Create output directories if they don't exist
     for dir_path in output_dirs.values():
         os.makedirs(dir_path, exist_ok=True)
+
+    # Remove existing symlinks in output directories
+    for dir_path in output_dirs.values():
+        for item in os.listdir(dir_path):
+            item_path = os.path.join(dir_path, item)
+            if os.path.islink(item_path):
+                os.remove(item_path)
 
     image_paths = glob.glob(image_pattern)
     valid_images = []
@@ -139,7 +147,6 @@ def main():
     # Load images (adjust the pattern to match your files)
     images, _ = load_images(os.path.join(top_dir, "../org/IMG_*.JPG"))
     print(f"Loaded {len(images)} images for stacking.")
-    return
     
     if len(images) < 2:
         print("Error: At least 2 images are required for stacking.")
@@ -151,7 +158,7 @@ def main():
         stacked_img = stack_images(aligned_images)
 
         # Save the result
-        save_result(stacked_img)
+        save_result(stacked_img, os.path.join(top_dir, "outputs","stacked_moon.png"))
 
 # --- Main Workflow ---
 if __name__ == "__main__":
