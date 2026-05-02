@@ -89,58 +89,84 @@ def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, over
         valid_paths.append(path)
 
     return valid_images, valid_paths
- 
+
+def crop_to_moon_disk(img):
+    """Crop image to the Moon's bounding box (assumes Moon is the brightest object)."""
+    gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        largest_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(largest_contour)
+        return img[y:y+h, x:x+w]
+    return img  # Fallback: return original if no contour found
+
+def align_single_image_phase_correlation(reference, img):
+    """Align using phase correlation (for translation-only)."""
+    shift, error, phasediff = phase_cross_correlation(reference, img)
+    rows, cols = reference.shape
+    M = np.float32([[1, 0, -shift[1]], [0, 1, -shift[0]]])
+    aligned = cv2.warpAffine(img, M, (cols, rows))
+    return aligned
+
 def align_single_image(reference, img, i, sift, aligned_dir):
     """Align a single image to the reference and save the result."""
-    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    img_gray = cv2.equalizeHist(img_gray)
+    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+    reference_gray = reference if len(reference.shape) == 2 else cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
 
-    # Find keypoints and descriptors
-    kp1, des1 = sift.detectAndCompute(reference, None)
+    # Try feature-based alignment first
+    kp1, des1 = sift.detectAndCompute(reference_gray, None)
     kp2, des2 = sift.detectAndCompute(img_gray, None)
 
-    if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
-        print(f"Warning: Not enough keypoints for image {i}. Skipping.")
-        return None
+    if des1 is not None and des2 is not None and len(kp1) >= 4 and len(kp2) >= 4:
+        flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=50))
+        matches = flann.knnMatch(des1, des2, k=2)
+        good_matches = [m for m, n in matches if m.distance < 0.7 * n.distance]
 
-    # Match descriptors using FLANN
-    flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=50))
-    matches = flann.knnMatch(des1, des2, k=2)
+        if len(good_matches) >= 4:
+            src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+            dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+            try:
+                M, _ = cv2.estimateAffine2D(dst_pts, src_pts, method=cv2.RANSAC, ransacReprojThreshold=5.0)
+                if M is not None:
+                    h, w = reference_gray.shape
+                    aligned_img = cv2.warpAffine(img_gray, M, (w, h))
+                    cv2.imwrite(os.path.join(aligned_dir, f"aligned_{i:03d}.png"), aligned_img)
+                    return aligned_img
+            except cv2.error:
+                pass
 
-    # Apply Lowe's ratio test
-    good_matches = []
-    for m, n in matches:
-        if m.distance < 0.7 * n.distance:
-            good_matches.append(m)
+    # Fallback: Phase correlation (translation-only)
+    print(f"Warning: Feature alignment failed for image {i}. Trying phase correlation.")
+    aligned_img = align_single_image_phase_correlation(reference_gray, img_gray)
+    cv2.imwrite(os.path.join(aligned_dir, f"aligned_{i:03d}.png"), aligned_img)
+    return aligned_img
 
-    if len(good_matches) < 4:
-        print(f"Warning: Not enough good matches for image {i}. Skipping.")
-        return None
+def align_images(images):
+    if len(images) < 1:
+        print("Error: No images to align.")
+        return []
 
-    # Extract matched keypoints
-    src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    top_dir = os.path.abspath(os.path.join(script_dir, "../.."))
+    aligned_dir = os.path.join(top_dir, "outputs/aligned")
+    os.makedirs(aligned_dir, exist_ok=True)
 
-    # Find homography matrix
-    try:
-        M, mask = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-    except cv2.error as e:
-        print(f"Warning: Failed to compute homography for image {i}: {e}. Skipping.")
-        return None
+    reference = cv2.cvtColor(images[0], cv2.COLOR_BGR2GRAY)
+    aligned_images = [reference]
+    cv2.imwrite(os.path.join(aligned_dir, "aligned_000.png"), reference)
 
-    if M is None:
-        print(f"Warning: Homography matrix is None for image {i}. Skipping.")
-        return None
+    sift = cv2.SIFT_create()
+    for i, img in enumerate(images[1:], start=1):
+        aligned_img = align_single_image(reference, img, i, sift, aligned_dir)
+        if aligned_img is not None:
+            aligned_images.append(aligned_img)
 
-    # Warp the image to align with the reference
-    h, w = reference.shape
-    try:
-        aligned_img = cv2.warpPerspective(img_gray, M, (w, h))
-        cv2.imwrite(os.path.join(aligned_dir, f"aligned_{i:03d}.png"), aligned_img)
-        return aligned_img
-    except cv2.error as e:
-        print(f"Warning: Failed to warp image {i}: {e}. Skipping.")
-        return None
+    if len(aligned_images) < 2:
+        print("Error: At least 2 images are required for stacking.")
+        return []
+
+    return aligned_images
 
 def align_images(images):
     if len(images) < 1:
