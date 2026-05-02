@@ -7,10 +7,6 @@ import matplotlib.pyplot as plt
 from skimage.registration import phase_cross_correlation
 from skimage.transform import SimilarityTransform
 
-import cv2
-import numpy as np
-import glob
-
 # --- Step 1: Load Images with Quality Checks ---
 def is_blurry(image, threshold=100):
     """Check if the image is blurry using Laplacian variance."""
@@ -32,7 +28,7 @@ def is_overexposed(image, saturation_percent_threshold=1.0):
     saturation_percent = (saturated_pixels / total_pixels) * 100
     return saturation_percent > saturation_percent_threshold
 
-def load_images(image_pattern, blur_threshold=100, underexposed_threshold=10, overexposed_threshold=240):
+def load_images(image_pattern, blur_threshold=100, underexposed_threshold=10, overexposed_threshold=1.0):
     image_paths = glob.glob(image_pattern)
     valid_images = []
     valid_paths = []
@@ -58,7 +54,7 @@ def load_images(image_pattern, blur_threshold=100, underexposed_threshold=10, ov
 
         # Check for overexposure
         if is_overexposed(gray, overexposed_threshold):
-            print(f"Rejected {path}: Overexposed (mean intensity > {overexposed_threshold})")
+            print(f"Rejected {path}: Overexposed (saturation > {overexposed_threshold}%)")
             continue
 
         valid_images.append(img)
