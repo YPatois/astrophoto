@@ -89,76 +89,91 @@ def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, over
         valid_paths.append(path)
 
     return valid_images, valid_paths
+ 
+def align_single_image(reference, img, i, sift, aligned_dir):
+    """Align a single image to the reference and save the result."""
+    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    img_gray = cv2.equalizeHist(img_gray)
+
+    # Find keypoints and descriptors
+    kp1, des1 = sift.detectAndCompute(reference, None)
+    kp2, des2 = sift.detectAndCompute(img_gray, None)
+
+    if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
+        print(f"Warning: Not enough keypoints for image {i}. Skipping.")
+        return None
+
+    # Match descriptors using FLANN
+    flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=50))
+    matches = flann.knnMatch(des1, des2, k=2)
+
+    # Apply Lowe's ratio test
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.7 * n.distance:
+            good_matches.append(m)
+
+    if len(good_matches) < 4:
+        print(f"Warning: Not enough good matches for image {i}. Skipping.")
+        return None
+
+    # Extract matched keypoints
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+
+    # Find homography matrix
+    try:
+        M, mask = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+    except cv2.error as e:
+        print(f"Warning: Failed to compute homography for image {i}: {e}. Skipping.")
+        return None
+
+    if M is None:
+        print(f"Warning: Homography matrix is None for image {i}. Skipping.")
+        return None
+
+    # Warp the image to align with the reference
+    h, w = reference.shape
+    try:
+        aligned_img = cv2.warpPerspective(img_gray, M, (w, h))
+        cv2.imwrite(os.path.join(aligned_dir, f"aligned_{i:03d}.png"), aligned_img)
+        return aligned_img
+    except cv2.error as e:
+        print(f"Warning: Failed to warp image {i}: {e}. Skipping.")
+        return None
 
 def align_images(images):
     if len(images) < 1:
         print("Error: No images to align.")
         return []
 
+    # Get the directory where the script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    top_dir = os.path.abspath(os.path.join(script_dir, "../.."))
+
+    # Define output directory for aligned images
+    aligned_dir = os.path.join(top_dir, "outputs/aligned")
+    os.makedirs(aligned_dir, exist_ok=True)
+
     # Use the first image as the reference
     reference = cv2.cvtColor(images[0], cv2.COLOR_BGR2GRAY)
     aligned_images = [reference]
+    cv2.imwrite(os.path.join(aligned_dir, "aligned_000.png"), reference)  # Save reference
 
-    # Initialize SIFT detector (more robust than ORB for low-contrast images)
+    # Initialize SIFT detector
     sift = cv2.SIFT_create()
 
-    for img in images[1:]:
-        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        # Preprocess: Enhance contrast
-        img_gray = cv2.equalizeHist(img_gray)
-
-        # Find keypoints and descriptors
-        kp1, des1 = sift.detectAndCompute(reference, None)
-        kp2, des2 = sift.detectAndCompute(img_gray, None)
-
-        if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
-            print("Warning: Not enough keypoints for alignment. Skipping image.")
-            continue
-
-        # Match descriptors using FLANN (better for SIFT)
-        flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=50))
-        matches = flann.knnMatch(des1, des2, k=2)
-
-        # Apply Lowe's ratio test to filter good matches
-        good_matches = []
-        for m, n in matches:
-            if m.distance < 0.7 * n.distance:
-                good_matches.append(m)
-
-        if len(good_matches) < 4:
-            print("Warning: Not enough good matches (< 4) for alignment. Skipping image.")
-            continue
-
-        # Extract matched keypoints
-        src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-
-        # Find homography matrix
-        try:
-            M, mask = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-        except cv2.error as e:
-            print(f"Warning: Failed to compute homography: {e}. Skipping image.")
-            continue
-
-        if M is None:
-            print("Warning: Homography matrix is None. Skipping image.")
-            continue
-
-        # Warp the image to align with the reference
-        h, w = reference.shape
-        try:
-            aligned_img = cv2.warpPerspective(img_gray, M, (w, h))
+    for i, img in enumerate(images[1:], start=1):
+        aligned_img = align_single_image(reference, img, i, sift, aligned_dir)
+        if aligned_img is not None:
             aligned_images.append(aligned_img)
-        except cv2.error as e:
-            print(f"Warning: Failed to warp image: {e}. Skipping image.")
-            continue
 
     if len(aligned_images) < 2:
-        print("Error: At least 2 images are required for stacking. Check your input images.")
+        print("Error: At least 2 images are required for stacking.")
         return []
 
     return aligned_images
+
 
 # --- Step 3: Stack Aligned Images ---
 def stack_images(aligned_images):
