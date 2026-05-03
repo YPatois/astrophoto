@@ -157,7 +157,7 @@ def validate_image(img, path, output_dirs, blur_threshold, underexposed_threshol
 
     # Check for overexposure
     if is_overexposed(grayfull, overexposed_threshold):
-        print(f"Rejected {path}: Overexposed (saturation > {overexposed_threshold}%)")
+        print(f"Rejected {path}: Overexposed (saturation > {overex,posed_threshold}%)")
         output_path = os.path.join(output_dirs["overexposed"], os.path.basename(path))
         cv2.imwrite(output_path, img)  # Save original image for rejected cases
         return False
@@ -167,6 +167,9 @@ def validate_image(img, path, output_dirs, blur_threshold, underexposed_threshol
     if moon_img is None:
         print(f"Warning: Moon detection failed for {path}. Skipping.")
         return False
+    
+    # Reapply exposure correction
+    moon_img = exposition_correction(moon_img)
 
     # Save preprocessed image for valid cases
     output_path = os.path.join(output_dirs["preprocessed"], os.path.basename(path))
@@ -341,13 +344,25 @@ def align_images(images):
     return aligned_images
 
 # --- Step 3: Stack Aligned Images ---
-def stack_images(aligned_images):
+def stack_images0(aligned_images):
     # Convert to float32 for averaging
     stacked = np.zeros_like(aligned_images[0], dtype=np.float32)
     for img in aligned_images:
         stacked += img.astype(np.float32)
     stacked /= len(aligned_images)
     return np.uint8(stacked)
+
+def stack_images_sigma_clip(aligned_images, sigma=3):
+    stacked = np.zeros_like(aligned_images[0], dtype=np.float32)
+    for img in aligned_images:
+        stacked += img.astype(np.float32)
+    mean = stacked / len(aligned_images)
+    std = np.std(aligned_images, axis=0)
+    stacked = np.where(np.abs(stacked - mean) < sigma * std, stacked, mean)
+    return np.uint8(stacked)
+
+def stack_images(aligned_images):
+    return np.uint8(np.median(aligned_images, axis=0))
 
 # --- Step 4: Save the Result ---
 def save_result(stacked_img, output_path="stacked_moon.png"):
