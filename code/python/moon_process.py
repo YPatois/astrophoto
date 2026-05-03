@@ -123,19 +123,19 @@ def detect_moon_bbox(img, path, output_dirs, light_threshold=50, blur_kernel_siz
     y2 = min(h_img, y2)
 
     # Crop the Moon region, on the color image
-    moon_crop = gray[y1:y2, x1:x2]
+    moon_crop = clahed[y1:y2, x1:x2]
 
-    # Pad with black to make it square
+    # Pad with black to make it square (3-channel)
     if moon_crop.shape[0] != moon_crop.shape[1]:
         size = max(moon_crop.shape[0], moon_crop.shape[1])
-        padded = np.zeros((size, size), dtype=np.uint8)
+        # Initialize padded as a 3-channel black image
+        padded = np.zeros((size, size, 3), dtype=np.uint8)
         y_offset = (size - moon_crop.shape[0]) // 2
         x_offset = (size - moon_crop.shape[1]) // 2
         padded[y_offset:y_offset + moon_crop.shape[0], x_offset:x_offset + moon_crop.shape[1]] = moon_crop
         moon_crop = padded
 
     return moon_crop
-
 
 def validate_image(img, path, output_dirs, blur_threshold, underexposed_threshold, overexposed_threshold):
     """Validate an image and save the preprocessed version to the appropriate directory if rejected."""
@@ -229,7 +229,48 @@ def crop_to_moon_disk(img):
         return img[y:y+h, x:x+w]
     return img  # Fallback: return original if no contour found
 
-def align_single_image_phase_correlation(reference, img):
+from skimage.transform import SimilarityTransform
+from skimage.registration import phase_cross_correlation
+
+def align_single_image_phase_correlation(reference, img, scale_range=(0.95, 1.05), angle_range=(-10, 10)):
+    """
+    Align using phase correlation with scale and rotation compensation.
+    - Uses `phase_cross_correlation` for translation.
+    - Tests a range of scales and rotations to find the best alignment.
+    - Returns the aligned image.
+    """
+    # Try multiple scales and rotations
+    best_aligned = None
+    best_score = -1  # Lower is better (phase_cross_correlation returns error metrics)
+
+    # Test scales in 1% increments (e.g., 0.95 to 1.05)
+    for scale in np.linspace(scale_range[0], scale_range[1], 11):
+        # Resize the image to test this scale
+        resized = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+
+        # Test rotations in 2° increments (e.g., -10° to +10°)
+        for angle in np.linspace(angle_range[0], angle_range[1], 11):
+            # Rotate the resized image
+            M = cv2.getRotationMatrix2D((resized.shape[1]//2, resized.shape[0]//2), angle, 1)
+            rotated = cv2.warpAffine(resized, M, (resized.shape[1], resized.shape[0]))
+
+            # Align using phase correlation (translation only)
+            shift, error, phasediff = phase_cross_correlation(reference, rotated)
+
+            # Score this alignment (lower error is better)
+            if best_aligned is None or error < best_score:
+                best_score = error
+                best_shift = shift
+                best_rotated = rotated
+
+    # Apply the best translation
+    rows, cols = reference.shape
+    M = np.float32([[1, 0, -best_shift[1]], [0, 1, -best_shift[0]]])
+    aligned = cv2.warpAffine(best_rotated, M, (cols, rows))
+
+    return aligned
+
+def align_single_image_phase_correlation0(reference, img):
     """Align using phase correlation (for translation-only)."""
     shift, error, phasediff = phase_cross_correlation(reference, img)
     rows, cols = reference.shape
