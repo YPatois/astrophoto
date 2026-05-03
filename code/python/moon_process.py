@@ -57,10 +57,15 @@ def setup_output_directories(top_dir):
 
     return output_dirs
 
-def preprocess_moon_image(img):
-    gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    return clahe.apply(gray)
+def exposition_correction(img, gridsize=8):
+    """Apply CLAHE to the L channel of a color image in LAB space."""
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    lab_planes = list(cv2.split(lab))  # Convert tuple to list
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(gridsize, gridsize))
+    lab_planes[0] = clahe.apply(lab_planes[0])  # Apply CLAHE to L channel
+    lab = cv2.merge(lab_planes)
+    bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    return bgr
 
 def detect_moon_bbox(img, path, output_dirs, light_threshold=50, blur_kernel_size=5, hist_cutoff=1000):
     """
@@ -69,8 +74,11 @@ def detect_moon_bbox(img, path, output_dirs, light_threshold=50, blur_kernel_siz
     - Uses X and Y axis projections with a cutoff to find the Moon's center and extent.
     - Returns a square crop centered on the Moon, padded with black if needed.
     """
-    gray0 = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = preprocess_moon_image(gray0)
+    #clahe = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    clahed = exposition_correction(img)
+
+    # We apply the logic on the grayed image
+    gray = clahed if len(clahed.shape) == 2 else cv2.cvtColor(clahed, cv2.COLOR_BGR2GRAY)
 
     # Threshold to isolate bright regions (Moon)
     _, thresh = cv2.threshold(gray, light_threshold, 255, cv2.THRESH_BINARY)
@@ -114,7 +122,7 @@ def detect_moon_bbox(img, path, output_dirs, light_threshold=50, blur_kernel_siz
     x2 = min(w_img, x2)
     y2 = min(h_img, y2)
 
-    # Crop the Moon region
+    # Crop the Moon region, on the color image
     moon_crop = gray[y1:y2, x1:x2]
 
     # Pad with black to make it square
