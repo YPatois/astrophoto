@@ -14,6 +14,7 @@ top_dir = os.path.abspath(os.path.join(script_dir, "../.."))
 # --- Step 1: Load Images with Quality Checks ---
 def is_blurry(image, threshold=100):
     """Check if the image is blurry using Laplacian variance."""
+    return False
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
     print(f"Laplacian variance: {laplacian_var}")
@@ -127,6 +128,7 @@ def detect_moon_bbox(img, path, output_dirs, light_threshold=50, blur_kernel_siz
 
     return moon_crop
 
+
 def validate_image(img, path, output_dirs, blur_threshold, underexposed_threshold, overexposed_threshold):
     """Validate an image and save the preprocessed version to the appropriate directory if rejected."""
     grayfull = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -167,7 +169,7 @@ def validate_image(img, path, output_dirs, blur_threshold, underexposed_threshol
 def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, overexposed_threshold=1.0):
     print(f"Loading images from {image_pattern}")
 
-    blacklist = [2691]  # List of blacklisted image numbers
+    blacklist = [2680,2684,2691]  # List of blacklisted image numbers
     # Setup output directories
     output_dirs = setup_output_directories(top_dir)
 
@@ -202,9 +204,9 @@ def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, over
         if isinstance(result, tuple) and result[0]:
             valid_images.append(result[1])  # Append the cropped Moon image
             valid_paths.append(path)
-            nb += 1
-            if nb == 2:
-                return valid_images, valid_paths
+            #nb += 1
+            #if nb == 2:
+            #    return valid_images, valid_paths
 
     return valid_images, valid_paths
 
@@ -307,7 +309,7 @@ def main():
     # Load images (adjust the pattern to match your files)
     images, _ = load_images(os.path.join(top_dir, "../org/IMG_*.JPG"))
     print(f"Loaded {len(images)} images for stacking.")
-    return
+    #return
 
     if len(images) < 2:
         print("Error: At least 2 images are required for stacking.")
