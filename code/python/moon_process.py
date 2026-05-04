@@ -221,20 +221,6 @@ def load_images(image_pattern, blur_threshold=5, underexposed_threshold=10, over
 
     return valid_images, valid_paths
 
-def crop_to_moon_disk(img):
-    """Crop image to the Moon's bounding box (assumes Moon is the brightest object)."""
-    gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if contours:
-        largest_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(largest_contour)
-        return img[y:y+h, x:x+w]
-    return img  # Fallback: return original if no contour found
-
-from skimage.transform import SimilarityTransform
-from skimage.registration import phase_cross_correlation
-
 def align_single_image_phase_correlation(reference, img, scale_range=(0.95, 1.05), angle_range=(-10, 10)):
     """
     Align using phase correlation with scale and rotation compensation.
@@ -273,20 +259,14 @@ def align_single_image_phase_correlation(reference, img, scale_range=(0.95, 1.05
 
     return aligned
 
-def align_single_image_phase_correlation0(reference, img):
-    """Align using phase correlation (for translation-only)."""
-    shift, error, phasediff = phase_cross_correlation(reference, img)
-    rows, cols = reference.shape
-    M = np.float32([[1, 0, -shift[1]], [0, 1, -shift[0]]])
-    aligned = cv2.warpAffine(img, M, (cols, rows))
-    return aligned
 
 def align_single_image(reference, img, i, sift, aligned_dir):
-    """Align a single image to the reference and save the result."""
+    """Align a single image to the reference and save the result (preserves color)."""
+    # Convert reference and img to grayscale ONLY for feature detection
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
     reference_gray = reference if len(reference.shape) == 2 else cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
 
-    # Try feature-based alignment first
+    # Try feature-based alignment first (on grayscale)
     kp1, des1 = sift.detectAndCompute(reference_gray, None)
     kp2, des2 = sift.detectAndCompute(img_gray, None)
 
@@ -302,7 +282,8 @@ def align_single_image(reference, img, i, sift, aligned_dir):
                 M, _ = cv2.estimateAffine2D(dst_pts, src_pts, method=cv2.RANSAC, ransacReprojThreshold=5.0)
                 if M is not None:
                     h, w = reference_gray.shape
-                    aligned_img = cv2.warpAffine(img_gray, M, (w, h))
+                    # Apply the transformation to the COLOR image (img)
+                    aligned_img = cv2.warpAffine(img, M, (w, h))
                     cv2.imwrite(os.path.join(aligned_dir, f"aligned_{i:03d}.png"), aligned_img)
                     return aligned_img
             except cv2.error:
@@ -310,7 +291,15 @@ def align_single_image(reference, img, i, sift, aligned_dir):
 
     # Fallback: Phase correlation (translation-only)
     print(f"Warning: Feature alignment failed for image {i}. Trying phase correlation.")
-    aligned_img = align_single_image_phase_correlation(reference_gray, img_gray)
+    # Convert reference and img to grayscale for phase correlation
+    reference_gray = reference if len(reference.shape) == 2 else cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
+    img_gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    aligned_img_gray = align_single_image_phase_correlation(reference_gray, img_gray)
+    # Apply the same transformation to the COLOR image
+    shift, _, _ = phase_cross_correlation(reference_gray, img_gray)
+    rows, cols = reference_gray.shape
+    M = np.float32([[1, 0, -shift[1]], [0, 1, -shift[0]]])
+    aligned_img = cv2.warpAffine(img, M, (cols, rows))  # Apply to color image
     cv2.imwrite(os.path.join(aligned_dir, f"aligned_{i:03d}.png"), aligned_img)
     return aligned_img
 
@@ -324,10 +313,8 @@ def align_images(images):
     aligned_dir = os.path.join(top_dir, "outputs/aligned")
     os.makedirs(aligned_dir, exist_ok=True)
 
-    # Use the first image as the reference (handle both grayscale and BGR)
+    # Use the first image as the reference (keep it in color)
     reference = images[0]
-    if len(reference.shape) == 3:
-        reference = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
     aligned_images = [reference]
     cv2.imwrite(os.path.join(aligned_dir, "aligned_000.png"), reference)
 
